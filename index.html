@@ -52,6 +52,11 @@
 <div id="log"><div class="empty">아래 버튼을 누르고 말하세요.<br>대화 내용이 여기에 글로 쌓입니다.</div></div>
 <div id="live"></div>
 <div id="status"></div>
+<div style="display:flex;gap:8px;padding:0 14px 8px;flex-shrink:0">
+  <input id="typeIn" placeholder="말이 안 되면 여기에 입력 (키보드 마이크도 가능)" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:15px">
+  <button onclick="sendTyped('ko')" style="border:none;border-radius:10px;padding:0 12px;background:var(--ko);color:#fff;font-weight:800;font-size:13px">→외국어</button>
+  <button onclick="sendTyped('fx')" style="border:none;border-radius:10px;padding:0 12px;background:var(--fx);color:#fff;font-weight:800;font-size:13px">→한국어</button>
+</div>
 <footer>
   <button id="koBtn">🎤 내가 말하기<br><span style="font-size:12px;font-weight:600">한국어 → 상대 언어</span></button>
   <button id="fxBtn">🎤 손님이 말하기<br><span style="font-size:12px;font-weight:600">상대 언어 → 한국어</span></button>
@@ -86,17 +91,20 @@ $('koBtn').onclick = () => toggle('ko');
 $('fxBtn').onclick = () => toggle('fx');
 
 function toggle(side){
+  unlockTTS(); // 아이폰: 버튼 터치 순간에 음성출력 잠금 해제
   if(activeSide === side){ stopListen(); return; }
   stopListen();
   startListen(side);
 }
+
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 function startListen(side){
   activeSide = side; wantListen = true;
   rec = new SR();
   rec.lang = side === 'ko' ? 'ko-KR' : LANGS[fxLang].bcp;
   rec.interimResults = true;
-  rec.continuous = true;
+  rec.continuous = !IS_IOS; // 아이폰은 연속모드가 불안정 → 짧게 듣고 자동 재시작
 
   rec.onstart = () => {
     $(side+'Btn').classList.add('listening');
@@ -109,13 +117,20 @@ function startListen(side){
     if(last.isFinal && t){ $('live').textContent=''; translate(t, side); }
   };
   rec.onerror = e => {
-    if(e.error === 'not-allowed'){
-      $('status').textContent = '마이크 권한을 허용해주세요.';
+    if(e.error === 'no-speech' || e.error === 'aborted') return; // 무시하고 재시작
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      $('status').textContent = '음성인식이 차단됨: 아이폰 설정 → 일반 → 키보드 → "받아쓰기 활성화" 켜고, Siri도 켜져 있어야 합니다. 그 후 페이지 새로고침.';
       wantListen = false; stopListen();
+      return;
     }
+    $('status').textContent = '음성인식 오류(' + e.error + ') — 다시 시도 중…';
   };
   rec.onend = () => {
-    if(wantListen && activeSide){ try{ rec.start(); }catch(_){} }
+    // 아이폰은 인식이 저절로 끝나므로 새로 만들어 재시작 (실시간 유지)
+    if(wantListen && activeSide){
+      const s = activeSide;
+      setTimeout(() => { if(wantListen && activeSide === s) startListen(s); }, 250);
+    }
   };
   try{ rec.start(); }catch(_){}
 }
@@ -223,7 +238,26 @@ function speak(text, lang){
   if(v) u.voice = v;
   speechSynthesis.speak(u);
 }
+let ttsUnlocked = false;
+function unlockTTS(){
+  if(ttsUnlocked) return;
+  try{
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+    ttsUnlocked = true;
+  }catch(_){}
+}
+
 // 목소리 미리 로드 (첫 발화 지연 방지)
+function sendTyped(side){
+  unlockTTS();
+  const v = $('typeIn').value.trim();
+  if(!v) return;
+  $('typeIn').value = '';
+  translate(v, side);
+}
+
 speechSynthesis.getVoices();
 if(speechSynthesis.onvoiceschanged !== undefined){
   speechSynthesis.onvoiceschanged = () => { voiceCache = {}; speechSynthesis.getVoices(); };
